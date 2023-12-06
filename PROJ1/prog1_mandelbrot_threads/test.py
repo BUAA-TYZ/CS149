@@ -11,6 +11,8 @@ for i in thread_num:
   rate = float(myoutput[rate_begin+1:rate_begin+5])
   speedup_res.append(rate)
 fig = plt.figure()
+plt.xlabel("# Thread")
+plt.ylabel("Speedup x")
 plt.plot(thread_num, speedup_res)
 plt.savefig("rate.png")
 plt.show()
