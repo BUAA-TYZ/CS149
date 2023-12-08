@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import os
 
 os.popen("make mandelbrot")
-thread_num = [i for i in range(2, 17)]
+thread_num = [i for i in range(2, 9)]
 speedup_res = []
 for i in thread_num:
   command = "./mandelbrot -t " + str(i)
@@ -13,6 +13,8 @@ for i in thread_num:
 fig = plt.figure()
 plt.xlabel("# Thread")
 plt.ylabel("Speedup x")
-plt.plot(thread_num, speedup_res)
+plt.plot(thread_num, speedup_res, label="reality")
+plt.plot(thread_num, thread_num, label="ideal")
+plt.legend(loc="best")
 plt.savefig("rate.png")
 plt.show()

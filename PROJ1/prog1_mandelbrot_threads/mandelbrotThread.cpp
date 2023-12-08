@@ -35,14 +35,11 @@ void workerThreadStart(WorkerArgs * const args) {
     // program that uses two threads, thread 0 could compute the top
     // half of the image and thread 1 could compute the bottom half.
 
-    int num_row = args->height / args->numThreads;
-    int start_row = args->height / args->numThreads * args->threadId;
-    // If tasks are unbalanced, the last thread must be responsible for more lines of task.
-    if (args->height%args->numThreads!=0 && args->threadId==args->numThreads-1) {
-        num_row = args->height - start_row;
+    for (int i=args->threadId; i<args->height; i+=args->numThreads) {
+        int start_row = i;
+        mandelbrotSerial(args->x0, args->y0, args->x1, args->y1,
+        args->width, args->height, start_row, 1, args->maxIterations, args->output);
     }
-    mandelbrotSerial(args->x0, args->y0, args->x1, args->y1,
-    args->width, args->height, start_row, num_row, args->maxIterations, args->output);
 }
 
 //
