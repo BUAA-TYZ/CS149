@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <algorithm>
+#include <immintrin.h>
 #include <pthread.h>
 #include <math.h>
 
@@ -18,14 +19,44 @@ static void verifyResult(int N, float* result, float* gold) {
     }
 }
 
+void sqrtAVX2(int N, float startGuess, float* values, float* output) {
+    __m256 kThreshold = _mm256_set1_ps(0.00001f);
+    __m256 n_kThreshold = _mm256_set1_ps(-0.00001f);
+    __m256 vec_half = _mm256_set1_ps(0.5f);
+    __m256 vec_one = _mm256_set1_ps(1.f);
+    __m256 vec_three = _mm256_set1_ps(3.f);
+    for (int i=0; i<N; i+=8) {
+        __m256 x = _mm256_loadu_ps(values+i);
+        __m256 guess = _mm256_set1_ps(startGuess); 
+
+        __m256 error = _mm256_sub_ps(_mm256_mul_ps(_mm256_mul_ps(guess, guess), x), vec_one);
+
+        __m256 mask = _mm256_or_ps(_mm256_cmp_ps(error, kThreshold, 14), _mm256_cmp_ps(error, n_kThreshold, 1));
+        __m256i maski = _mm256_castps_si256(mask);
+
+        while (_mm256_extract_epi64(maski, 0) != 0 ||  _mm256_extract_epi64(maski, 1) != 0 ||
+        _mm256_extract_epi64(maski, 2) != 0 || _mm256_extract_epi64(maski, 3) != 0) {
+            guess = _mm256_mul_ps(_mm256_sub_ps(_mm256_mul_ps(vec_three, guess), 
+            _mm256_mul_ps(_mm256_mul_ps(_mm256_mul_ps(guess, guess), guess), x)), vec_half);
+            error = _mm256_sub_ps(_mm256_mul_ps(_mm256_mul_ps(guess, guess), x), vec_one); 
+
+            mask = _mm256_or_ps(_mm256_cmp_ps(error, kThreshold, 14), _mm256_cmp_ps(error, n_kThreshold, 1));
+            maski = _mm256_castps_si256(mask);
+        }
+
+        _mm256_storeu_ps(output+i, _mm256_mul_ps(x, guess));
+    }
+}
+
 int main() {
 
     const unsigned int N = 20 * 1000 * 1000;
     const float initialGuess = 1.0f;
-
-    float* values = new float[N];
-    float* output = new float[N];
-    float* gold = new float[N];
+ 
+    float* __attribute__((aligned(64))) values = new float[N];
+    alignas(32) float* output = new float[N];
+    alignas(32) float* gold = new float[N];
+    printf("%x\n", values);
 
     for (unsigned int i=0; i<N; i++)
     {
@@ -34,7 +65,8 @@ int main() {
         // to you generate best and worse-case speedups
         
         // starter code populates array with random input values
-        values[i] = .001f + 2.998f * static_cast<float>(rand()) / RAND_MAX;
+        // values[i] = .001f + 2.998f * static_cast<float>(rand()) / RAND_MAX;
+        values[i] = 2.999f;
     }
 
     // generate a gold version to check results
@@ -70,6 +102,26 @@ int main() {
     }
 
     printf("[sqrt ispc]:\t\t[%.3f] ms\n", minISPC * 1000);
+
+    verifyResult(N, output, gold);
+
+    // Clear out the buffer
+    for (unsigned int i = 0; i < N; ++i)
+        output[i] = 0;
+
+    //
+    // Compute the image using the mannul ispc implementation; report the minimum
+    // time of three runs.
+    //
+    double minISPCM = 1e30;
+    for (int i = 0; i < 3; ++i) {
+        double startTime = CycleTimer::currentSeconds();
+        sqrtAVX2(N, initialGuess, values, output);
+        double endTime = CycleTimer::currentSeconds();
+        minISPCM = std::min(minISPCM, endTime - startTime);
+    }
+
+    printf("[sqrt mannul ispc]:\t[%.3f] ms\n", minISPCM * 1000);
 
     verifyResult(N, output, gold);
 
