@@ -1,0 +1,15 @@
+objs
+
+# proj1
+*.ppm
+mandelbrot
+
+# proj2
+*.o
+myexp
+
+# proj4
+sqrt
+
+# proj5
+saxpy
