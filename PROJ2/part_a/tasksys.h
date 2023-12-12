@@ -9,7 +9,6 @@
 #include <mutex>
 #include <queue>
 #include <thread>
-#include <unordered_map>
 
 /*
  * TaskSystemSerial: This class is the student's implementation of a
@@ -100,13 +99,9 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         std::mutex task_exit_mtx_;
         std::condition_variable task_exit_cv_;
 
-        // Store the task source, the task ID and TaskID, which is different.
+        // Store the task source, the task ID and num_total_tasks.
         std::queue<std::pair<IRunnable *, std::pair<int, int>>> task_queue_;
         std::vector<std::thread> threads_;
-
-        // Store the state of task and num_total_tasks of the TaskID
-        std::unordered_map<TaskID, std::pair<bool, int>> task_state_;
-        TaskID task_id_ = 0;
 
         int finish_task_ = 0;
         int finish_thread_ = 0;
