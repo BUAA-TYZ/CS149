@@ -17,8 +17,8 @@ for i in test_data:
 
 axs = plt.axes()
 axs.set_xscale('log')
-axs.set_xlabel("data_size")
-axs.set_ylabel("Speedup")
+axs.set_xlabel("# of Iterations")
+axs.set_ylabel("# of Speedup")
 plt.plot(test_data, res)
 plt.title("False sharing speedup mesurement")
 plt.savefig("./rate.png")
