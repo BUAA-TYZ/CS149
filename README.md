@@ -67,7 +67,7 @@
   - fine-grained lock
 
 - **Summary of improving program performance**
-
+  - 
   - identify and exploit locality: communicate less
   - reduce overhead(fewer, larger messages)
   - reduce contention
@@ -77,7 +77,7 @@
 
 #### LEC08 Parallel Programming Case Studies
 
-- An example of batching can be fount at CS61C LAB07. 
+- An example of batching can be found at CS61C LAB07. 
   - get a maximum speedup 20x.
 - Generally, algorithms in class is not important.
 - Key issues when discussing the applications
