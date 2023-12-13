@@ -38,22 +38,20 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
                     // printf("TaskID: %d, TaskIndex: %d\n", task.second.second, task.second.first);
                     int task_id = task.second.second;
                     task_state_mtx_.lock();
-                    if (task_state_.count(task_id) == 0) {
-                       throw std::runtime_error("Depend on tasks not created."); 
-                    }
-                    int num_total_tasks = task_state_[task_id].second;
+                    auto task_info = task_state_[task_id];
                     task_state_mtx_.unlock();
+                    int num_total_tasks = task_info->num_total_tasks_;
 
                     task.first->runTask(task.second.first, num_total_tasks);
 
-                    task_state_mtx_.lock();
-                    if (++task_state_[task_id].first == num_total_tasks) {
+                    task_info->task_mtx_->lock();
+                    if (++task_info->num_finish_tasks_ == num_total_tasks) {
                         // printf("TaskID: %d All Done, notify the thread.\n", task_id);
-                        task_finish_cv_[task_id].notify_all();
+                        task_info->task_finish_cv_->notify_all();
                         task_sync_cv_.notify_all();
-                        task_state_mtx_.unlock();
+                        task_info->task_mtx_->unlock();
                     } else {
-                        task_state_mtx_.unlock();
+                        task_info->task_mtx_->unlock();
                     }
 
                     guard.lock();
@@ -117,16 +115,16 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
 
     std::vector<TaskID> not_finished_task{};
     task_state_mtx_.lock();
-    task_state_[task_id] = {0, num_total_tasks};
     for (auto id: deps) {
-        if (task_state_.count(id)) {
-            if (task_state_[id].first != task_state_[id].second) {
+        if (task_state_.size() > id) {
+            if (task_state_[id]->num_finish_tasks_ != task_state_[id]->num_total_tasks_) {
                 not_finished_task.emplace_back(id);
             }
         } else {
             throw std::runtime_error("Depend on tasks not created.");
         }
     }
+    task_state_.push_back(std::make_shared<TaskInfo>(task_id, num_total_tasks));
     task_state_mtx_.unlock();
 
 
@@ -147,14 +145,18 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
 
             // for (size_t i=0; i<not_finished_task.size(); i++)
             //     threads[i].join();
-            std::unique_lock<std::mutex> guard{task_state_mtx_};
             for (size_t i=0; i<not_finished_task.size(); i++) {
                 int task_id = not_finished_task[i];
-                task_finish_cv_[task_id].wait(guard, [this, task_id] {
-                    return task_state_[task_id].first == task_state_[task_id].second;
+
+                task_state_mtx_.lock();
+                auto task_info = task_state_[task_id];
+                task_state_mtx_.unlock();
+
+                std::unique_lock<std::mutex> guard{*(task_info->task_mtx_)};
+                task_info->task_finish_cv_->wait(guard, [task_info, task_id] {
+                    return task_info->num_finish_tasks_ == task_info->num_total_tasks_;
                 });
             }
-            guard.unlock();
             launchTask(task_id, runnable, num_total_tasks);
         }};
         t1.detach();
@@ -167,7 +169,8 @@ void TaskSystemParallelThreadPoolSleeping::sync() {
     std::unique_lock<std::mutex> guard{task_state_mtx_};
     task_sync_cv_.wait(guard, [this] {
         for (auto& x: task_state_) {
-            if (x.second.first != x.second.second) {
+            std::lock_guard<std::mutex> guard(*(x->task_mtx_));
+            if (x->num_finish_tasks_ != x->num_total_tasks_) {
                 return false;
             }
         }
@@ -286,6 +289,11 @@ void TaskSystemSerial::launchTask(int task_id, IRunnable* runnable, int num_tota
 TaskID TaskSystemSerial::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                                     const std::vector<TaskID>& deps) {
     int task_id = task_id_++;
+
+    // printf("Task %d dependes on {", task_id);
+    // for (auto id: deps)  printf("%d ", id);
+    // printf("}\n");
+
     std::vector<TaskID> not_finished_task{};
     task_state_mtx_.lock();
     task_state_[task_id] = {0, num_total_tasks};
@@ -305,19 +313,19 @@ TaskID TaskSystemSerial::runAsyncWithDeps(IRunnable* runnable, int num_total_tas
         launchTask(task_id, runnable, num_total_tasks);
     } else {
         std::thread t1{[=] {
-            std::unique_lock<std::mutex> guard{task_state_mtx_};
             for (size_t i=0; i<not_finished_task.size(); i++) {
+                std::unique_lock<std::mutex> guard{task_state_mtx_};
                 int task_id = not_finished_task[i];
                 task_finish_cv_[task_id].wait(guard, [this, task_id] {
                     if (task_state_[task_id].first == task_state_[task_id].second) {
                         // printf("Received signal from TASKID: %d\n", task_id);
                         return true;
                     }
+                    // printf("Wait TaskID: %d\n", task_id);
                     return false;
                     // return task_state_[task_id].first == task_state_[task_id].second;
                 });
             }
-            guard.unlock();
             launchTask(task_id, runnable, num_total_tasks);
         }};
         t1.detach();

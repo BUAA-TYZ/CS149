@@ -19,11 +19,28 @@
  */
 class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
     private:
+        class TaskInfo {
+        public:
+            std::condition_variable* task_finish_cv_;
+            std::mutex* task_mtx_;
+
+            int num_finish_tasks_ = 0;
+            int num_total_tasks_;
+
+            int task_id_;
+            TaskInfo(int t, int n): task_id_(t), num_total_tasks_(n) {
+                task_finish_cv_ = new std::condition_variable();
+                task_mtx_ = new std::mutex();
+            }
+
+            ~TaskInfo() {
+                delete task_finish_cv_;
+                delete task_mtx_;
+            }
+        };
+
         std::condition_variable task_queue_cv_;
         std::mutex task_queue_mtx_;
-
-        // Managed by task_state_mtx_
-        std::unordered_map<TaskID, std::condition_variable> task_finish_cv_;
 
         std::mutex task_exit_mtx_;
         std::condition_variable task_exit_cv_;
@@ -32,10 +49,9 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         std::queue<std::pair<IRunnable *, std::pair<int, int>>> task_queue_;
         std::vector<std::thread> threads_;
 
-        // Store the finished tasks of the TaskID and num_total_tasks of the TaskID
         // Use the task_state_mtx_ to ensure the multi-thread security.
         std::mutex task_state_mtx_;
-        std::unordered_map<TaskID, std::pair<int, int>> task_state_;
+        std::vector<std::shared_ptr<TaskInfo>> task_state_;
         TaskID task_id_ = 0;
 
         std::condition_variable task_sync_cv_;
