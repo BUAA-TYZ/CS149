@@ -23,7 +23,9 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
         threads_.emplace_back([i, this]() {
             std::unique_lock<std::mutex> guard{task_queue_mtx_};
             while (!stop_) {
-                task_queue_cv_.wait(guard);
+                task_queue_cv_.wait(guard, [this] {
+                    return !task_queue_.empty() || stop_;
+                });
 
                 if (stop_) {
                     break;
@@ -46,10 +48,10 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
 
                     task_state_mtx_.lock();
                     if (++task_state_[task_id].first == num_total_tasks) {
-                        printf("TaskID: %d All Done, notify the thread.\n", task_id);
-                        task_state_mtx_.unlock();
+                        // printf("TaskID: %d All Done, notify the thread.\n", task_id);
                         task_finish_cv_[task_id].notify_all();
                         task_sync_cv_.notify_all();
+                        task_state_mtx_.unlock();
                     } else {
                         task_state_mtx_.unlock();
                     }
@@ -93,10 +95,9 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
 
 void TaskSystemParallelThreadPoolSleeping::launchTask(int task_id, IRunnable* runnable, int num_total_tasks) {
     {
-        printf("Launch the task %d\n", task_id);
+        // printf("Launch the task %d\n", task_id);
         std::lock_guard<std::mutex> guard{task_queue_mtx_};
         std::pair<IRunnable *, std::pair<int, int>> task_item = {runnable, {0, task_id}};
-        // assert(task_queue_.empty());
         for (int i = 0; i < num_total_tasks; i++) {
             task_item.second.first = i;
             task_queue_.push(task_item);
@@ -110,17 +111,13 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
 
     int task_id = task_id_++;
 
-    printf("Launch the task %d depended on {", task_id);
-    for (auto id: deps)  printf("%d ", id);
-    printf("}\n");
-
-    {
-        std::lock_guard<std::mutex> guard{task_state_mtx_};
-        task_state_[task_id] = {0, num_total_tasks};
-    }
+    // printf("Task %d dependes on {", task_id);
+    // for (auto id: deps)  printf("%d ", id);
+    // printf("}\n");
 
     std::vector<TaskID> not_finished_task{};
     task_state_mtx_.lock();
+    task_state_[task_id] = {0, num_total_tasks};
     for (auto id: deps) {
         if (task_state_.count(id)) {
             if (task_state_[id].first != task_state_[id].second) {
@@ -150,13 +147,14 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
 
             // for (size_t i=0; i<not_finished_task.size(); i++)
             //     threads[i].join();
+            std::unique_lock<std::mutex> guard{task_state_mtx_};
             for (size_t i=0; i<not_finished_task.size(); i++) {
                 int task_id = not_finished_task[i];
-                std::unique_lock<std::mutex> guard{task_state_mtx_};
                 task_finish_cv_[task_id].wait(guard, [this, task_id] {
                     return task_state_[task_id].first == task_state_[task_id].second;
                 });
             }
+            guard.unlock();
             launchTask(task_id, runnable, num_total_tasks);
         }};
         t1.detach();
@@ -168,17 +166,13 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
 void TaskSystemParallelThreadPoolSleeping::sync() {
     std::unique_lock<std::mutex> guard{task_state_mtx_};
     task_sync_cv_.wait(guard, [this] {
-        bool finished = true;
-
         for (auto& x: task_state_) {
             if (x.second.first != x.second.second) {
-                finished = false;
-                break;
+                return false;
             }
         }
-        return finished;
+        return true;
     });
-    return;
 }
 
 /*
@@ -206,7 +200,9 @@ TaskSystemSerial::TaskSystemSerial(int num_threads): ITaskSystem(num_threads) {
         threads_.emplace_back([i, this]() {
             std::unique_lock<std::mutex> guard{task_queue_mtx_};
             while (!stop_) {
-                task_queue_cv_.wait(guard);
+                task_queue_cv_.wait(guard, [this] {
+                    return !task_queue_.empty() || stop_;
+                });
 
                 if (stop_) {
                     break;
@@ -230,9 +226,9 @@ TaskSystemSerial::TaskSystemSerial(int num_threads): ITaskSystem(num_threads) {
                     task_state_mtx_.lock();
                     if (++task_state_[task_id].first == num_total_tasks) {
                         // printf("TaskID: %d All Done, notify the thread.\n", task_id);
-                        task_state_mtx_.unlock();
                         task_finish_cv_[task_id].notify_all();
                         task_sync_cv_.notify_all();
+                        task_state_mtx_.unlock();
                     } else {
                         task_state_mtx_.unlock();
                     }
@@ -276,6 +272,7 @@ void TaskSystemSerial::run(IRunnable* runnable, int num_total_tasks) {
 
 void TaskSystemSerial::launchTask(int task_id, IRunnable* runnable, int num_total_tasks) {
     {
+        // printf("Launch the task %d\n", task_id);
         std::lock_guard<std::mutex> guard{task_queue_mtx_};
         std::pair<IRunnable *, std::pair<int, int>> task_item = {runnable, {0, task_id}};
         for (int i = 0; i < num_total_tasks; i++) {
@@ -289,18 +286,9 @@ void TaskSystemSerial::launchTask(int task_id, IRunnable* runnable, int num_tota
 TaskID TaskSystemSerial::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                                     const std::vector<TaskID>& deps) {
     int task_id = task_id_++;
-
-    // printf("Lauch the task %d depended on {", task_id);
-    // for (auto id: deps)  printf("%d ", id);
-    // printf("}\n");
-
-    {
-        std::lock_guard<std::mutex> guard{task_state_mtx_};
-        task_state_[task_id] = {0, num_total_tasks};
-    }
-
     std::vector<TaskID> not_finished_task{};
     task_state_mtx_.lock();
+    task_state_[task_id] = {0, num_total_tasks};
     for (auto id: deps) {
         if (task_state_.count(id)) {
             if (task_state_[id].first != task_state_[id].second) {
@@ -317,13 +305,19 @@ TaskID TaskSystemSerial::runAsyncWithDeps(IRunnable* runnable, int num_total_tas
         launchTask(task_id, runnable, num_total_tasks);
     } else {
         std::thread t1{[=] {
+            std::unique_lock<std::mutex> guard{task_state_mtx_};
             for (size_t i=0; i<not_finished_task.size(); i++) {
                 int task_id = not_finished_task[i];
-                std::unique_lock<std::mutex> guard{task_state_mtx_};
                 task_finish_cv_[task_id].wait(guard, [this, task_id] {
-                    return task_state_[task_id].first == task_state_[task_id].second;
+                    if (task_state_[task_id].first == task_state_[task_id].second) {
+                        // printf("Received signal from TASKID: %d\n", task_id);
+                        return true;
+                    }
+                    return false;
+                    // return task_state_[task_id].first == task_state_[task_id].second;
                 });
             }
+            guard.unlock();
             launchTask(task_id, runnable, num_total_tasks);
         }};
         t1.detach();
@@ -335,15 +329,12 @@ TaskID TaskSystemSerial::runAsyncWithDeps(IRunnable* runnable, int num_total_tas
 void TaskSystemSerial::sync() {
     std::unique_lock<std::mutex> guard{task_state_mtx_};
     task_sync_cv_.wait(guard, [this] {
-        bool finished = true;
-
         for (auto& x: task_state_) {
             if (x.second.first != x.second.second) {
-                finished = false;
-                break;
+                return false;
             }
         }
-        return finished;
+        return true;
     });
     return;
 }
@@ -365,7 +356,9 @@ TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(n
         threads_.emplace_back([i, this]() {
             std::unique_lock<std::mutex> guard{task_queue_mtx_};
             while (!stop_) {
-                task_queue_cv_.wait(guard);
+                task_queue_cv_.wait(guard, [this] {
+                    return !task_queue_.empty() || stop_;
+                });
 
                 if (stop_) {
                     break;
@@ -389,9 +382,9 @@ TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(n
                     task_state_mtx_.lock();
                     if (++task_state_[task_id].first == num_total_tasks) {
                         // printf("TaskID: %d All Done, notify the thread.\n", task_id);
-                        task_state_mtx_.unlock();
                         task_finish_cv_[task_id].notify_all();
                         task_sync_cv_.notify_all();
+                        task_state_mtx_.unlock();
                     } else {
                         task_state_mtx_.unlock();
                     }
@@ -429,14 +422,6 @@ TaskSystemParallelSpawn::~TaskSystemParallelSpawn() {
 }
 
 void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
-
-
-    //
-    // TODO: CS149 students will modify the implementation of this
-    // method in Parts A and B.  The implementation provided below runs all
-    // tasks sequentially on the calling thread.
-    //
-
     runAsyncWithDeps(runnable, num_total_tasks, {});
     sync();
 }
@@ -445,7 +430,6 @@ void TaskSystemParallelSpawn::launchTask(int task_id, IRunnable* runnable, int n
     {
         std::lock_guard<std::mutex> guard{task_queue_mtx_};
         std::pair<IRunnable *, std::pair<int, int>> task_item = {runnable, {0, task_id}};
-        // assert(task_queue_.empty());
         for (int i = 0; i < num_total_tasks; i++) {
             task_item.second.first = i;
             task_queue_.push(task_item);
@@ -486,14 +470,14 @@ TaskID TaskSystemParallelSpawn::runAsyncWithDeps(IRunnable* runnable, int num_to
         launchTask(task_id, runnable, num_total_tasks);
     } else {
         std::thread t1{[=] {
+            std::unique_lock<std::mutex> guard{task_state_mtx_};
             for (size_t i=0; i<not_finished_task.size(); i++) {
                 int task_id = not_finished_task[i];
-                std::unique_lock<std::mutex> guard{task_state_mtx_};
                 task_finish_cv_[task_id].wait(guard, [this, task_id] {
                     return task_state_[task_id].first == task_state_[task_id].second;
                 });
             }
-            task_sync_cv_.notify_all();
+            guard.unlock();
             launchTask(task_id, runnable, num_total_tasks);
         }};
         t1.detach();
@@ -505,17 +489,13 @@ TaskID TaskSystemParallelSpawn::runAsyncWithDeps(IRunnable* runnable, int num_to
 void TaskSystemParallelSpawn::sync() {
     std::unique_lock<std::mutex> guard{task_state_mtx_};
     task_sync_cv_.wait(guard, [this] {
-        bool finished = true;
-
         for (auto& x: task_state_) {
             if (x.second.first != x.second.second) {
-                finished = false;
-                break;
+                return false;
             }
         }
-        return finished;
+        return true;
     });
-    return;
 }
 
 /*
@@ -535,7 +515,9 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
         threads_.emplace_back([i, this]() {
             std::unique_lock<std::mutex> guard{task_queue_mtx_};
             while (!stop_) {
-                task_queue_cv_.wait(guard);
+                task_queue_cv_.wait(guard, [this] {
+                    return !task_queue_.empty() || stop_;
+                });
 
                 if (stop_) {
                     break;
@@ -559,9 +541,9 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
                     task_state_mtx_.lock();
                     if (++task_state_[task_id].first == num_total_tasks) {
                         // printf("TaskID: %d All Done, notify the thread.\n", task_id);
-                        task_state_mtx_.unlock();
                         task_finish_cv_[task_id].notify_all();
                         task_sync_cv_.notify_all();
+                        task_state_mtx_.unlock();
                     } else {
                         task_state_mtx_.unlock();
                     }
@@ -599,14 +581,6 @@ TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
 }
 
 void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
-
-
-    //
-    // TODO: CS149 students will modify the implementation of this
-    // method in Parts A and B.  The implementation provided below runs all
-    // tasks sequentially on the calling thread.
-    //
-
     runAsyncWithDeps(runnable, num_total_tasks, {});
     sync();
 }
@@ -615,7 +589,6 @@ void TaskSystemParallelThreadPoolSpinning::launchTask(int task_id, IRunnable* ru
     {
         std::lock_guard<std::mutex> guard{task_queue_mtx_};
         std::pair<IRunnable *, std::pair<int, int>> task_item = {runnable, {0, task_id}};
-        // assert(task_queue_.empty());
         for (int i = 0; i < num_total_tasks; i++) {
             task_item.second.first = i;
             task_queue_.push(task_item);
@@ -628,18 +601,9 @@ TaskID TaskSystemParallelThreadPoolSpinning::runAsyncWithDeps(IRunnable* runnabl
                                                     const std::vector<TaskID>& deps) {
 
     int task_id = task_id_++;
-
-    // printf("Lauch the task %d depended on {", task_id);
-    // for (auto id: deps)  printf("%d ", id);
-    // printf("}\n");
-
-    {
-        std::lock_guard<std::mutex> guard{task_state_mtx_};
-        task_state_[task_id] = {0, num_total_tasks};
-    }
-
     std::vector<TaskID> not_finished_task{};
     task_state_mtx_.lock();
+    task_state_[task_id] = {0, num_total_tasks};
     for (auto id: deps) {
         if (task_state_.count(id)) {
             if (task_state_[id].first != task_state_[id].second) {
@@ -656,27 +620,14 @@ TaskID TaskSystemParallelThreadPoolSpinning::runAsyncWithDeps(IRunnable* runnabl
         launchTask(task_id, runnable, num_total_tasks);
     } else {
         std::thread t1{[=] {
-            // std::vector<std::thread> threads;
-            // for (size_t i=0; i<not_finished_task.size(); i++) {
-            //     int task_id = not_finished_task[i];
-            //     threads.emplace_back([this, i, task_id] {
-            //         std::unique_lock<std::mutex> guard{task_state_mtx_};
-            //         task_finish_cv_[task_id].wait(guard, [this, task_id] {
-            //             return task_state_[task_id].first == task_state_[task_id].second;
-            //         });
-            //     });
-            // }
-
-            // for (size_t i=0; i<not_finished_task.size(); i++)
-            //     threads[i].join();
+            std::unique_lock<std::mutex> guard{task_state_mtx_};
             for (size_t i=0; i<not_finished_task.size(); i++) {
                 int task_id = not_finished_task[i];
-                std::unique_lock<std::mutex> guard{task_state_mtx_};
                 task_finish_cv_[task_id].wait(guard, [this, task_id] {
                     return task_state_[task_id].first == task_state_[task_id].second;
                 });
             }
-            task_sync_cv_.notify_all();
+            guard.unlock();
             launchTask(task_id, runnable, num_total_tasks);
         }};
         t1.detach();
@@ -688,17 +639,13 @@ TaskID TaskSystemParallelThreadPoolSpinning::runAsyncWithDeps(IRunnable* runnabl
 void TaskSystemParallelThreadPoolSpinning::sync() {
     std::unique_lock<std::mutex> guard{task_state_mtx_};
     task_sync_cv_.wait(guard, [this] {
-        bool finished = true;
-
         for (auto& x: task_state_) {
             if (x.second.first != x.second.second) {
-                finished = false;
-                break;
+                return false;
             }
         }
-        return finished;
+        return true;
     });
-    return;
 }
 
 
